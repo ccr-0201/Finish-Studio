@@ -48,7 +48,7 @@ input[type=text],input[type=password]{font:inherit;color:var(--tx);background:va
 <header><b>Finish Studio</b>
 <label class="b">Tải model<input id="fm" type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" hidden></label>
 <label class="b">Tải map vật liệu<input id="ft" type="file" accept="image/*" multiple hidden></label>
-<button id="bfit">Vừa khung</button><button id="bcrop">Crop</button><button id="bpen" title="Hút vật liệu trên model để chỉnh (phím I)">Hút vật liệu (I)</button><button id="bdemo">Model mẫu</button><label class="mu">Đơn vị <select id="un"><option value="auto">Tự động</option><option value="m">m</option><option value="cm">cm</option><option value="mm">mm</option></select></label><label class="mu">Trục đứng file <select id="ax"><option value="auto">Tự động</option><option value="y">Y lên</option><option value="z">Z lên</option></select></label><span id="pres" class="mu" style="margin-left:auto"></span><button id="bacct" hidden></button></header>
+<button id="bfit">Vừa khung</button><button id="bcrop">Crop</button><button id="bpen" title="Hút vật liệu trên model để chỉnh (phím I)">Hút vật liệu (I)</button><button id="bdemo">Model mẫu</button><label class="mu">Đơn vị <select id="un"><option value="auto">Tự động</option><option value="m">m</option><option value="cm">cm</option><option value="mm">mm</option></select></label><label class="mu">Trục đứng file <select id="ax"><option value="auto">Tự động</option><option value="y">Y lên</option><option value="z">Z lên</option></select></label><span id="pname" class="mu" style="margin-left:auto"></span><span id="pres" class="mu"></span><button id="bproj" hidden>Dự án mới</button><button id="bacct" hidden></button></header>
 <main>
 <aside id="L"><h3>Vật liệu</h3><div style="display:flex;gap:6px;margin-bottom:8px"><button id="mmat" class="on" style="flex:1;white-space:normal;padding:5px 4px;font-size:12px">Theo tên vật liệu</button><button id="mobj" style="flex:1;white-space:normal;padding:5px 4px;font-size:12px">Từng đối tượng</button></div><div class="mu" id="mdesc" style="margin:-2px 0 10px"></div><div id="cats" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px"></div><div class="grid" id="lib"></div></aside>
 <div id="vp">
@@ -334,7 +334,7 @@ $('#crst').onclick=cropReset;
 $('#bcrop').onclick=e=>{cropOn=!cropOn;$('#crop').classList.toggle('show',cropOn);e.target.classList.toggle('on',cropOn);cropUpd()};
 
 /* ---- Cloud (Supabase): tài khoản ID + mật khẩu, lịch sử tệp, chia sẻ, cùng chỉnh phương án ---- */
-let sb=null,me=null,cur=null,pendingCloud=null,lastFile=null,remote=false,saveT=null,chan=null,shareRow=null;
+let sb=null,me=null,cur=null,pendingCloud=null,lastFile=null,remote=false,saveT=null,chan=null,shareRow=null,subId=null;
 const el=(t,x,c)=>{const e=document.createElement(t);if(x)e.textContent=x;if(c)e.className=c;return e};
 const fmtSize=b=>b>1e6?(b/1e6).toFixed(1)+' MB':Math.ceil(b/1e3)+' KB';
 const mailOf=i=>i+'@5cmarchi.app';
@@ -355,7 +355,7 @@ $('#alogin').onclick=()=>doAuth(false);$('#asign').onclick=()=>doAuth(true);$('#
 async function enter(u){me={id:u.id};let {data:p}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle();
   if(!p){const uid=(u.email||'').split('@')[0];await sb.from('profiles').insert({id:u.id,uid,display_name:uid});p={uid,display_name:uid,settings:{}}}
   me.uid=p.uid;me.name=p.display_name||p.uid;
-  $('#auth').style.display='none';$('#bacct').hidden=false;$('#bacct').textContent=me.name;$('#aname').value=me.name;applyPrefs(p.settings||{});
+  $('#auth').style.display='none';$('#bacct').hidden=false;$('#bproj').hidden=false;$('#bacct').textContent=me.name;$('#aname').value=me.name;applyPrefs(p.settings||{});
   await loadMaps();await listFiles()}
 function applyPrefs(st){if(st.bg){S.background.set(st.bg);$('#abg').value=st.bg}
   if(st.ex){$('#ex').value=st.ex;R.toneMappingExposure=+st.ex}if(st.az!=null){$('#az').value=st.az;sunPos()}}
@@ -379,20 +379,37 @@ async function listFiles(){if(!sb||!me)return;const {data,error}=await sb.from('
   fill('#fmine',data.filter(r=>r.owner===me.id),true);fill('#fshared',data.filter(r=>r.owner!==me.id),false)}
 function fill(sel,rows,own){const box=$(sel);box.innerHTML='';if(!rows.length){box.append(el('div','Chưa có tệp.','mu'));return}
   rows.forEach(r=>{const d=el('div','','frow'),b=el('div','','fb'),op=el('button','Mở');op.onclick=()=>openCloud(r);b.append(op);
-    if(own){const sh=el('button','Chia sẻ'),dl=el('button','Xóa');sh.onclick=()=>openShare(r);dl.onclick=()=>delCloud(r);b.append(sh,dl)}
-    d.append(el('div',r.name,'fn'),el('div',new Date(r.created_at).toLocaleString('vi-VN')+', '+fmtSize(r.size),'mu'),b);box.append(d)})}
-async function cloudUpload(f){if(f.size>5e7){toast('Tệp lớn hơn 50 MB nên không lưu lên tài khoản (chỉ xem trên máy này).');return null}
+    if(own){const rn=el('button','Đổi tên'),sh=el('button','Chia sẻ'),dl=el('button','Xóa');rn.onclick=()=>renameCloud(r);sh.onclick=()=>openShare(r);dl.onclick=()=>delCloud(r);b.append(rn,sh,dl)}
+    const info=(r.path?(r.model_name||r.fmt||'model')+', '+fmtSize(r.size):'Chưa có model')+', '+new Date(r.created_at).toLocaleString('vi-VN');
+    d.append(el('div',(r.is_project?'[Dự án] ':'')+r.name,'fn'),el('div',info,'mu'),b);box.append(d)})}
+function showCur(){$('#pname').textContent=cur?(cur.is_project?'Dự án: ':'Tệp: ')+cur.name:''}
+function clearModel(){if(model){S.remove(model);model=null}meshes=[];gs=[];srcFmt='demo';lastFile=null;bb.makeEmpty();list();select(null)}
+async function newProject(){if(!sb||!me)return;const nm=(prompt('Tên dự án mới:','Dự án '+new Date().toLocaleDateString('vi-VN'))||'').trim();if(!nm)return;
+  const {data,error}=await sb.from('models').insert({name:nm,is_project:true,size:0}).select().single();if(error)return toast('Không tạo được dự án: '+error.message);
+  unsub();clearModel();cur=data;showCur();subscribeState();await listFiles();$('#drawer').hidden=false;toast('Đã tạo dự án "'+nm+'" và lưu vào Tệp của tôi. Hãy tải model lên để bắt đầu.')}
+$('#bproj').onclick=newProject;
+async function renameCloud(r){const nm=(prompt('Tên mới:',r.name)||'').trim();if(!nm||nm===r.name)return;
+  const {error}=await sb.from('models').update({name:nm}).eq('id',r.id);if(error)return toast(error.message);r.name=nm;if(cur&&cur.id===r.id){cur.name=nm;showCur()}listFiles()}
+async function putFile(f){if(f.size>5e7){toast('Tệp lớn hơn 50 MB nên không lưu lên tài khoản (chỉ xem trên máy này).');return null}
   const ext=(f.name.split('.').pop()||'bin').toLowerCase(),path=me.id+'/'+crypto.randomUUID()+'.'+ext;
-  const {error}=await sb.storage.from('models').upload(path,f);if(error){toast('Không lưu được tệp: '+error.message);return null}
-  const {data,error:e2}=await sb.from('models').insert({name:f.name,fmt:ext,size:f.size,path}).select().single();if(e2){toast(e2.message);return null}
-  listFiles();toast('Đã lưu "'+f.name+'" vào lịch sử.');return data}
-async function openCloud(r){toast('Đang tải tệp...');const {data,error}=await sb.storage.from('models').download(r.path);if(error)return toast('Không tải được: '+error.message);
+  const {error}=await sb.storage.from('models').upload(path,f);if(error){toast('Không lưu được tệp: '+error.message);return null}return{path,ext}}
+async function cloudUpload(f){const u=await putFile(f);if(!u)return null;
+  const {data,error}=await sb.from('models').insert({name:f.name,model_name:f.name,fmt:u.ext,size:f.size,path:u.path}).select().single();if(error){toast(error.message);return null}
+  listFiles();toast('Đã lưu "'+f.name+'" vào Tệp của tôi.');return data}
+async function attach(row,f){const u=await putFile(f);if(!u)return row;const old=row.path;
+  const {data,error}=await sb.from('models').update({path:u.path,fmt:u.ext,size:f.size,model_name:f.name}).eq('id',row.id).select().single();if(error){toast(error.message);return row}
+  if(old)await sb.storage.from('models').remove([old]);
+  await sb.from('scene_states').upsert({model_id:row.id,state:{},updated_by:me.id,updated_at:new Date().toISOString()});
+  listFiles();toast('Đã thêm "'+f.name+'" vào dự án "'+row.name+'".');return data}
+async function openCloud(r){
+  if(!r.path){$('#drawer').hidden=true;unsub();clearModel();cur=r;showCur();subscribeState();toast('Đã mở dự án "'+r.name+'". Hãy tải model lên để bắt đầu.');return}
+  toast('Đang tải tệp...');const {data,error}=await sb.storage.from('models').download(r.path);if(error)return toast('Không tải được: '+error.message);
   if(r.owner!==me.id){const {data:s}=await sb.from('shares').select('can_edit').eq('model_id',r.id).eq('user_id',me.id).maybeSingle();
     r.can_edit=!s||s.can_edit;if(s&&!s.can_edit)toast('Bạn chỉ có quyền xem; thay đổi sẽ không được lưu.')}
-  $('#drawer').hidden=true;await loadFile(new File([data],r.name),r)}
+  $('#drawer').hidden=true;await loadFile(new File([data],r.model_name||(r.name.includes('.')?r.name:r.name+'.'+r.fmt)),r)}
 async function delCloud(r){if(!confirm('Xóa "'+r.name+'" khỏi lịch sử?'))return;
-  await sb.storage.from('models').remove([r.path]);const {error}=await sb.from('models').delete().eq('id',r.id);if(error)return toast(error.message);
-  if(cur&&cur.id===r.id){unsub();cur=null}if(shareRow&&shareRow.id===r.id){shareRow=null;$('#shr').hidden=true}listFiles()}
+  if(r.path)await sb.storage.from('models').remove([r.path]);const {error}=await sb.from('models').delete().eq('id',r.id);if(error)return toast(error.message);
+  if(cur&&cur.id===r.id){unsub();cur=null;showCur()}if(shareRow&&shareRow.id===r.id){shareRow=null;$('#shr').hidden=true}listFiles()}
 async function openShare(r){shareRow=r;$('#shr').hidden=false;$('#shn').textContent=r.name;await listShares()}
 async function listShares(){const box=$('#shl');box.innerHTML='';const {data}=await sb.from('shares').select('user_id,can_edit').eq('model_id',shareRow.id);
   if(!data||!data.length){box.append(el('div','Chưa chia sẻ cho ai.','mu'));return}
@@ -420,17 +437,21 @@ async function applyState(st){remote=true;try{restoreT(gs.flatMap(g=>g.slots));
   for(const [k,v] of Object.entries(st.o||{})){const [i,j]=k.split(':'),mm=meshes[+i],sl=mm&&mm.userData.slots[+j];if(sl)await putState([sl],v)}}
   finally{remote=false}refresh()}
 const canEdit=()=>cur&&(cur.owner===me.id||cur.can_edit!==false);
-function queueSave(){if(!sb||!cur||remote||!canEdit())return;clearTimeout(saveT);
+function queueSave(){if(!sb||!cur||remote||srcFmt=='demo'||!canEdit())return;clearTimeout(saveT);
   saveT=setTimeout(async()=>{const {error}=await sb.from('scene_states').upsert({model_id:cur.id,state:snapshot(),updated_by:me.id,updated_at:new Date().toISOString()});if(error)toast('Không lưu được phương án: '+error.message)},700)}
-function unsub(){if(chan){sb.removeChannel(chan);chan=null}$('#pres').textContent=''}
-function subscribeState(){const id=cur.id;chan=sb.channel('m:'+id,{config:{presence:{key:me.uid}}})
+function unsub(){subId=null;if(chan){sb.removeChannel(chan);chan=null}$('#pres').textContent=''}
+function subscribeState(){const id=cur.id;subId=id;chan=sb.channel('m:'+id,{config:{presence:{key:me.uid}}})
   .on('postgres_changes',{event:'*',schema:'public',table:'scene_states',filter:'model_id=eq.'+id},p=>{const n=p.new;if(n&&n.updated_by!==me.id&&n.state&&n.state.v)applyState(n.state)})
   .on('presence',{event:'sync'},()=>{const k=Object.keys(chan.presenceState());$('#pres').textContent=k.length>1?'Đang xem: '+k.join(', '):''})
   .subscribe(async s=>{if(s=='SUBSCRIBED')await chan.track({uid:me.uid})})}
-async function onModelLoaded(){if(!sb)return;unsub();cur=null;if(!me||srcFmt=='demo')return;
-  if(pendingCloud){cur=pendingCloud;pendingCloud=null}else if(lastFile)cur=await cloudUpload(lastFile);
-  if(!cur)return;const {data}=await sb.from('scene_states').select('state').eq('model_id',cur.id).maybeSingle();
-  if(data&&data.state&&data.state.v)await applyState(data.state);subscribeState()}
+async function onModelLoaded(){if(!sb||!me||srcFmt=='demo')return;let pull=false;
+  if(pendingCloud){unsub();cur=pendingCloud;pendingCloud=null;pull=true}
+  else if(lastFile){const own=cur&&cur.owner===me.id&&cur.is_project;
+    if(own&&(!cur.path||confirm('Thay model của dự án "'+cur.name+'" bằng tệp này?\nOK = thay trong dự án. Hủy = lưu thành tệp riêng.')))cur=await attach(cur,lastFile);
+    else{unsub();cur=await cloudUpload(lastFile)}}
+  showCur();if(!cur)return;
+  if(pull){const {data}=await sb.from('scene_states').select('state').eq('model_id',cur.id).maybeSingle();if(data&&data.state&&data.state.v)await applyState(data.state)}
+  if(subId!==cur.id){unsub();subscribeState()}}
 
 renderLib();setMode('mat');demo();initCloud();
 let tl=performance.now();(function loop(t){requestAnimationFrame(loop);const dt=Math.min(.1,(t-tl)/1000);tl=t;fly(dt,keys.has('shift'));if(tw)tw();OC.update();R.render(S,C)})(tl);
