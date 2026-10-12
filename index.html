@@ -235,30 +235,62 @@ function ifcRefs(api,id,ref,d,keys,leaf){d=d||0;if(!ref||d>6)return[];if(Array.i
   if(t==leaf)return o.Name&&o.Name.value?[o.Name.value]:[];
   return keys.flatMap(k=>o[k]?ifcRefs(api,id,o[k],d+1,keys,leaf):[])}
 const IFC_MAT_KEYS=['ForLayerSet','MaterialLayers','Material','Materials','MaterialConstituents','ForProfileSet','MaterialProfiles'];
-function ifcToGroup(api,W,T,buf){
+async function ifcToGroup(api,W,T,buf,onProgress){
   const id=api.OpenModel(buf,{COORDINATE_TO_ORIGIN:true}),matOf=new Map(),styleOf=new Map(),mats=new Map(),root=new T.Group();
   const each=(type,fn)=>{try{const v=api.GetLineIDsWithType(id,type);for(let i=0;i<v.size();i++)fn(api.GetLine(id,v.get(i)))}catch(e){console.warn(e)}};
-  // tên vật liệu gán cho cấu kiện (cả lớp cấu tạo của IfcMaterialLayerSet)
-  each(W.IFCRELASSOCIATESMATERIAL,r=>{const nm=[...new Set(ifcRefs(api,id,r.RelatingMaterial,0,IFC_MAT_KEYS,'IFCMATERIAL'))].join(' + ');
-    if(nm)(r.RelatedObjects||[]).forEach(o=>matOf.set(o.value,nm))});
-  // kế thừa từ kiểu (type) và từ cấu kiện cha
-  each(W.IFCRELDEFINESBYTYPE,r=>{const m=r.RelatingType&&matOf.get(r.RelatingType.value);if(m)(r.RelatedObjects||[]).forEach(o=>{if(!matOf.has(o.value))matOf.set(o.value,m)})});
-  each(W.IFCRELAGGREGATES,r=>{const m=r.RelatingObject&&matOf.get(r.RelatingObject.value);if(m)(r.RelatedObjects||[]).forEach(o=>{if(!matOf.has(o.value))matOf.set(o.value,m)})});
-  // tên surface style gán cho từng bề mặt/thành phần hình học (Revit đặt tên style = tên vật liệu)
-  each(W.IFCSTYLEDITEM,l=>{if(!l.Item||l.Item.value==null)return;const nm=ifcRefs(api,id,l.Styles,0,['Styles'],'IFCSURFACESTYLE')[0];if(nm&&!styleOf.has(l.Item.value))styleOf.set(l.Item.value,nm)});
-  api.StreamAllMeshes(id,fm=>{const eid=fm.expressID;let nm='',tn='Khác';
-    try{const l=api.GetLine(id,eid);nm=l.Name&&l.Name.value||'';tn=api.GetNameFromTypeCode(l.type).replace(/^Ifc/i,'')}catch(e){}
-    const gl=[];for(let i=0;i<fm.geometries.size();i++)gl.push(fm.geometries.get(i));
-    const sns=gl.map(pg=>styleOf.get(pg.geometryExpressID)||''),multi=new Set(sns.filter(Boolean)).size>1,pm=matOf.get(eid)||'';
-    gl.forEach((pg,i)=>{const geo=api.GetGeometry(id,pg.geometryExpressID),vs=api.GetVertexArray(geo.GetVertexData(),geo.GetVertexDataSize()),
-      ix=new Uint32Array(api.GetIndexArray(geo.GetIndexData(),geo.GetIndexDataSize())),n=vs.length/6,pos=new Float32Array(n*3),nor=new Float32Array(n*3);
-      for(let k=0;k<n;k++){pos[k*3]=vs[k*6];pos[k*3+1]=vs[k*6+1];pos[k*3+2]=vs[k*6+2];nor[k*3]=vs[k*6+3];nor[k*3+1]=vs[k*6+4];nor[k*3+2]=vs[k*6+5]}
-      geo.delete();const c=pg.color,col=new T.Color().setRGB(c.x,c.y,c.z).convertSRGBToLinear(),sn=sns[i];
-      let key=multi&&sn?sn:(pm&&!pm.includes(' + ')?pm:(sn||pm));if(!key)key=tn+' #'+col.getHexString();
-      let mt=mats.get(key);if(!mt){mt=new T.MeshStandardMaterial({color:col,roughness:.8,name:key,transparent:c.w<1,opacity:c.w,depthWrite:c.w>=1});mats.set(key,mt)}
-      const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(pos,3));g.setAttribute('normal',new T.BufferAttribute(nor,3));g.setIndex(new T.BufferAttribute(ix,1));
-      const m=new T.Mesh(g,mt);m.matrixAutoUpdate=false;m.matrix.fromArray(pg.flatTransformation);m.name=nm||tn;root.add(m)})});
-  api.CloseModel(id);return root}
+  try{
+    // Tên vật liệu gán cho cấu kiện, bao gồm cả lớp cấu tạo của IfcMaterialLayerSet.
+    each(W.IFCRELASSOCIATESMATERIAL,r=>{const nm=[...new Set(ifcRefs(api,id,r.RelatingMaterial,0,IFC_MAT_KEYS,'IFCMATERIAL'))].join(' + ');
+      if(nm)(r.RelatedObjects||[]).forEach(o=>matOf.set(o.value,nm))});
+    each(W.IFCRELDEFINESBYTYPE,r=>{const m=r.RelatingType&&matOf.get(r.RelatingType.value);if(m)(r.RelatedObjects||[]).forEach(o=>{if(!matOf.has(o.value))matOf.set(o.value,m)})});
+    each(W.IFCRELAGGREGATES,r=>{const m=r.RelatingObject&&matOf.get(r.RelatingObject.value);if(m)(r.RelatedObjects||[]).forEach(o=>{if(!matOf.has(o.value))matOf.set(o.value,m)})});
+    each(W.IFCSTYLEDITEM,l=>{if(!l.Item||l.Item.value==null)return;const nm=ifcRefs(api,id,l.Styles,0,['Styles'],'IFCSURFACESTYLE')[0];if(nm&&!styleOf.has(l.Item.value))styleOf.set(l.Item.value,nm)});
+
+    // Snapshot lightweight mesh descriptors first. Convert geometry in small batches below,
+    // allowing the browser to repaint and respond while a large IFC is being prepared.
+    const items=[];
+    api.StreamAllMeshes(id,fm=>{
+      const eid=fm.expressID;let nm='',tn='Khác';
+      try{const l=api.GetLine(id,eid);nm=l.Name&&l.Name.value||'';tn=api.GetNameFromTypeCode(l.type).replace(/^Ifc/i,'')}catch(e){}
+      const geoms=[];
+      for(let i=0;i<fm.geometries.size();i++){
+        const pg=fm.geometries.get(i),tr=pg.flatTransformation;
+        geoms.push({geometryExpressID:pg.geometryExpressID,flatTransformation:Array.from(tr),color:{x:pg.color.x,y:pg.color.y,z:pg.color.z,w:pg.color.w}});
+      }
+      items.push({eid,nm,tn,geoms});
+    });
+
+    let done=0,total=items.reduce((n,x)=>n+x.geoms.length,0);
+    for(const item of items){
+      const sns=item.geoms.map(pg=>styleOf.get(pg.geometryExpressID)||''),multi=new Set(sns.filter(Boolean)).size>1,pm=matOf.get(item.eid)||'';
+      for(let i=0;i<item.geoms.length;i++){
+        const pg=item.geoms[i],geo=api.GetGeometry(id,pg.geometryExpressID);
+        try{
+          const vs=api.GetVertexArray(geo.GetVertexData(),geo.GetVertexDataSize());
+          const ix=new Uint32Array(api.GetIndexArray(geo.GetIndexData(),geo.GetIndexDataSize()));
+          const c=pg.color,col=new T.Color().setRGB(c.x,c.y,c.z).convertSRGBToLinear(),sn=sns[i];
+          let key=multi&&sn?sn:(pm&&!pm.includes(' + ')?pm:(sn||pm));if(!key)key=item.tn+' #'+col.getHexString();
+          let mt=mats.get(key);if(!mt){mt=new T.MeshStandardMaterial({color:col,roughness:.8,name:key,transparent:c.w<1,opacity:c.w,depthWrite:c.w>=1});mats.set(key,mt)}
+          const g=new T.BufferGeometry();
+          // IFC vertex data is interleaved XYZ + normal XYZ. Reuse it directly instead of
+          // allocating separate position and normal arrays, reducing peak RAM on large models.
+          const interleaved=new T.InterleavedBuffer(vs,6);
+          g.setAttribute('position',new T.InterleavedBufferAttribute(interleaved,3,0));
+          g.setAttribute('normal',new T.InterleavedBufferAttribute(interleaved,3,3));
+          g.setIndex(new T.BufferAttribute(ix,1));
+          const m=new T.Mesh(g,mt);m.matrixAutoUpdate=false;m.matrix.fromArray(pg.flatTransformation);m.name=item.nm||item.tn;root.add(m);
+        } finally {try{geo.delete()}catch(e){}}
+        done++;
+        if(done%20===0||done===total){
+          if(onProgress)onProgress(done,total);
+          // Give the browser time to paint the progress message and handle input.
+          await new Promise(resolve=>requestAnimationFrame(()=>resolve()));
+        }
+      }
+    }
+    return root;
+  } finally {try{api.CloseModel(id)}catch(e){}}
+}
 
 let ifcApi;
 async function ensureIFC(){if(ifcApi)return;
@@ -266,10 +298,20 @@ async function ensureIFC(){if(ifcApi)return;
   const bin=Uint8Array.from(atob($('#ifcw').textContent.trim()),c=>c.charCodeAt(0)),of=window.fetch;
   window.fetch=(u,...a)=>/\.wasm(\?|$)/.test(String(u&&u.url||u))?Promise.resolve(new Response(bin,{headers:{'Content-Type':'application/wasm'}})):of(u,...a);
   try{const api=new WebIFC.IfcAPI();await api.Init(p=>p);ifcApi=api}finally{window.fetch=of}}
-async function loadIFC(f){toast('Đang đọc IFC, có thể mất vài giây...');
-  try{await ensureIFC();const g=ifcToGroup(ifcApi,WebIFC,T,new Uint8Array(await f.arrayBuffer()));
-    if(!g.children.length)return toast('Không tìm thấy hình học trong file IFC.');setModel(g,'ifc');toast('Đã tải '+f.name+': '+gs.length+' nhóm vật liệu.')}
-  catch(e){console.error(e);toast('Không đọc được IFC (WebAssembly có thể bị trình duyệt chặn).')}}
+async function loadIFC(f){
+  // Browser-side parsing is limited by available RAM, not a GitHub Pages upload quota.
+  const sizeMB=f.size/(1024*1024);
+  if(sizeMB>300){toast('IFC quá lớn ('+sizeMB.toFixed(0)+' MB). Hãy xuất IFC nhẹ hơn hoặc dùng GLB.');return}
+  toast('Đang khởi tạo bộ đọc IFC ('+sizeMB.toFixed(1)+' MB)...');
+  try{
+    await ensureIFC();
+    const buf=new Uint8Array(await f.arrayBuffer());
+    toast('Đang phân tích cấu trúc IFC...');
+    const g=await ifcToGroup(ifcApi,WebIFC,T,buf,(done,total)=>toast('Đang dựng hình IFC: '+done.toLocaleString()+' / '+total.toLocaleString()+' phần hình học'));
+    if(!g.children.length)return toast('Không tìm thấy hình học trong file IFC.');
+    setModel(g,'ifc');toast('Đã tải '+f.name+': '+gs.length+' nhóm vật liệu.');
+  }catch(e){console.error('Finish Studio IFC load failed:',e);toast('Không đọc được IFC. Kiểm tra Console (F12) để xem lỗi chi tiết.');}
+}
 let penOn=false,held=null;
 function showHeld(){$('#held').style.display=held?'flex':'none';if(held){$('#hi').src=held.m.thumb;$('#hn').textContent=held.m.n}}
 function setPen(v){penOn=v;hl(hovH);if(v)toast('Material Picker: bấm vào model để chọn vật liệu và chỉnh ở panel phải.');$('#bpen').classList.toggle('on',v);R.domElement.style.cursor=v?'crosshair':'';if(!v)held=null;showHeld()}
@@ -306,7 +348,7 @@ function setModel(o,fmt,hint){srcFmt=fmt;srcUp=hint||guessUp(o);if(model)S.remov
     m.userData.slots=[].concat(m.material).map((x,i)=>{x.side=T.DoubleSide;const k=x.name||x.uuid;let g=gm.get(k);
       if(!g){g={name:x.name||'Vật liệu '+(gs.length+1),color:x.color?'#'+x.color.getHexString():'#888888',slots:[]};gm.set(k,g);gs.push(g)}
       const sl={mesh:m,i,orig:x,g,m:null,cur:null};g.slots.push(sl);return sl})});
-  fit();list();select(null);cropReset();onModelLoaded()}
+  if(fmt==='ifc'&&meshes.length>2500){meshes.forEach(m=>{m.castShadow=false;m.receiveShadow=false});toast('IFC lớn: đã tắt đổ bóng theo từng mesh để tăng tốc hiển thị.')}fit();list();select(null);cropReset();onModelLoaded()}
 $('#ax').onchange=$('#un').onchange=()=>{if(!model)return;restoreT(gs.flatMap(g=>g.slots));rescale();fit();cropReset();select(null);toast('Đã đổi đơn vị.')};
 async function loadFile(f,row){lastFile=f;pendingCloud=row||null;const n=f.name.toLowerCase();try{
   if(/\.(glb|gltf)$/.test(n))new T.GLTFLoader().parse(await f.arrayBuffer(),'',r=>{setModel(r.scene,'glb','y');toast('Đã tải '+f.name)},()=>toast('Không đọc được file. Hãy dùng GLB đóng gói sẵn.'));
