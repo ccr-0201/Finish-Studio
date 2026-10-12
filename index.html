@@ -49,7 +49,7 @@ input[type=text],input[type=password]{font:inherit;color:var(--tx);background:va
 <header><b>Finish Studio</b>
 <label class="b">Tải model<input id="fm" type="file" accept=".glb,.gltf,.obj,.fbx,.ifc" hidden></label>
 <label class="b">Tải map vật liệu<input id="ft" type="file" accept="image/*" multiple hidden></label>
-<button id="bfit">Vừa khung</button><button id="bcrop">Crop</button><button id="bpen" title="Hút vật liệu trên model để chỉnh (phím I)">Material Picker (I)</button><button id="bdemo">Model mẫu</button><label class="mu">Đơn vị <select id="un"><option value="auto">Tự động</option><option value="m">m</option><option value="cm">cm</option><option value="mm">mm</option></select></label><label class="mu">Trục đứng file <select id="ax"><option value="auto">Tự động</option><option value="y">Y lên</option><option value="z">Z lên</option></select></label><span id="pname" class="mu" style="margin-left:auto"></span><span id="pres" class="mu"></span><button id="bproj" hidden>Dự án mới</button><button id="bacct" hidden></button></header>
+<button id="bfit">Vừa khung</button><button id="bcrop">Crop</button><button id="bpen" title="Material Picker: chọn vật liệu trên model để chỉnh (phím I)">Material Picker (I)</button><button id="bdemo">Model mẫu</button><label class="mu">Đơn vị <select id="un"><option value="auto">Tự động</option><option value="m">m</option><option value="cm">cm</option><option value="mm">mm</option></select></label><label class="mu">Trục đứng file <select id="ax"><option value="auto">Tự động</option><option value="y">Y lên</option><option value="z">Z lên</option></select></label><span id="pname" class="mu" style="margin-left:auto"></span><span id="pres" class="mu"></span><button id="bproj" hidden>Dự án mới</button><button id="bacct" hidden></button></header>
 <main>
 <aside id="L"><h3>Vật liệu</h3><div style="display:flex;gap:6px;margin-bottom:8px"><button id="mmat" class="on" style="flex:1;white-space:normal;padding:5px 4px;font-size:12px">Theo tên vật liệu</button><button id="mobj" style="flex:1;white-space:normal;padding:5px 4px;font-size:12px">Từng đối tượng</button></div><div class="mu" id="mdesc" style="margin:-2px 0 10px"></div><div id="cats" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px"></div><div class="grid" id="lib"></div></aside>
 <div id="vp">
@@ -103,7 +103,7 @@ const R=new T.WebGLRenderer({antialias:true});
 R.setPixelRatio(Math.min(devicePixelRatio,2));R.shadowMap.enabled=true;R.shadowMap.type=T.PCFSoftShadowMap;
 R.outputEncoding=T.sRGBEncoding;R.toneMapping=T.ACESFilmicToneMapping;R.localClippingEnabled=true;vp.prepend(R.domElement);
 const S=new T.Scene();S.background=new T.Color(0xb9c4cf);
-const C=new T.PerspectiveCamera(40,1,.1,1000);C.up.set(0,0,1);const OC=new T.OrbitControls(C,R.domElement);OC.enableDamping=true;OC.screenSpacePanning=true;
+const C=new T.PerspectiveCamera(40,1,.1,1000);C.up.set(0,0,1);const OC=new T.OrbitControls(C,R.domElement);OC.enableDamping=false;OC.screenSpacePanning=true;
 const sun=new T.DirectionalLight(0xfff4e5,1.2);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.bias=-.0005;
 const hemi=new T.HemisphereLight(0xffffff,0x80868c,.35);hemi.position.set(0,0,1);S.add(hemi,sun,sun.target);
 const ground=new T.Mesh(new T.PlaneGeometry(1,1),new T.ShadowMaterial({opacity:.25}));ground.receiveShadow=true;S.add(ground);const axes=new T.AxesHelper(1);S.add(axes);
@@ -272,7 +272,7 @@ async function loadIFC(f){toast('Đang đọc IFC, có thể mất vài giây...
   catch(e){console.error(e);toast('Không đọc được IFC (WebAssembly có thể bị trình duyệt chặn).')}}
 let penOn=false,held=null;
 function showHeld(){$('#held').style.display=held?'flex':'none';if(held){$('#hi').src=held.m.thumb;$('#hn').textContent=held.m.n}}
-function setPen(v){penOn=v;hl(hovH);if(v)toast('Hút vật liệu: bấm vào model để chọn vật liệu và chỉnh ở panel phải.');$('#bpen').classList.toggle('on',v);R.domElement.style.cursor=v?'crosshair':'';if(!v)held=null;showHeld()}
+function setPen(v){penOn=v;hl(hovH);if(v)toast('Material Picker: bấm vào model để chọn vật liệu và chỉnh ở panel phải.');$('#bpen').classList.toggle('on',v);R.domElement.style.cursor=v?'crosshair':'';if(!v)held=null;showHeld()}
 $('#bpen').onclick=()=>setPen(!penOn);$('#hx').onclick=()=>{held=null;showHeld()};
 let tw=null,mR=1;const keys=new Set();
 function centerOf(ms){const b=new T.Box3();ms.forEach(m=>b.expandByObject(m));return b.getCenter(V3())}
