@@ -450,9 +450,94 @@ async function projectFromCurrent(nm){const f=lastFile,u=await putFile(f);if(!u)
   unsub();cur=data;showCur();subscribeState();await listFiles();$('#drawer').hidden=false;toast('Đã tạo dự án "'+nm+'" từ model đang mở và lưu vào Tệp của tôi.')}
 async function renameCloud(r){const nm=(prompt('Tên mới:',r.name)||'').trim();if(!nm||nm===r.name)return;
   const {error}=await sb.from('models').update({name:nm}).eq('id',r.id);if(error)return toast(error.message);r.name=nm;if(cur&&cur.id===r.id){cur.name=nm;showCur()}listFiles()}
-async function putFile(f){if(f.size>5e7){toast('Tệp lớn hơn 50 MB nên không lưu lên tài khoản (chỉ xem trên máy này).');return null}
+/* Upload file lớn lên Supabase Storage bằng TUS (resumable upload).
+   Supabase Storage > Configuration vẫn phải cho phép kích thước file lớn hơn file cần tải. */
+const tusB64=s=>btoa(unescape(encodeURIComponent(String(s))));
+function tusRequest(url,method,headers,body){
+  return new Promise((resolve,reject)=>{
+    const x=new XMLHttpRequest();x.open(method,url,true);
+    Object.entries(headers||{}).forEach(([k,v])=>x.setRequestHeader(k,v));
+    x.onload=()=>resolve(x);x.onerror=()=>reject(new Error('Lỗi mạng khi upload resumable.'));
+    x.ontimeout=()=>reject(new Error('Upload hết thời gian chờ.'));
+    x.timeout=120000;x.send(body===undefined?null:body);
+  });
+}
+async function tusUploadModel(f,path){
+  const C0=window.CFG||{},base=String(C0.url||'').replace(/\/+$/,'');
+  const {data:sd,error:se}=await sb.auth.getSession();
+  if(se||!sd.session)throw new Error('Phiên đăng nhập hết hạn. Hãy đăng nhập lại.');
+  const token=sd.session.access_token;
+  const endpoint=base+'/storage/v1/upload/resumable';
+  const metadata=[
+    'bucketName '+tusB64('models'),
+    'objectName '+tusB64(path),
+    'contentType '+tusB64(f.type||'application/octet-stream'),
+    'cacheControl '+tusB64('3600')
+  ].join(',');
+  const created=await tusRequest(endpoint,'POST',{
+    'Tus-Resumable':'1.0.0','Upload-Length':String(f.size),
+    'Upload-Metadata':metadata,'apikey':C0.key,
+    'Authorization':'Bearer '+token,'x-upsert':'false'
+  });
+  if(created.status!==201){
+    const detail=created.responseText||('HTTP '+created.status);
+    throw new Error('Không khởi tạo được upload TUS: '+detail);
+  }
+  const location=created.getResponseHeader('Location');
+  if(!location)throw new Error('Supabase không trả về địa chỉ upload resumable.');
+  const uploadUrl=new URL(location,endpoint).href,chunkSize=6*1024*1024;
+  let offset=0,lastShown=-1;
+  while(offset<f.size){
+    const end=Math.min(offset+chunkSize,f.size),chunk=f.slice(offset,end);
+    let ok=false,lastErr=null;
+    for(let attempt=0;attempt<3&&!ok;attempt++){
+      try{
+        const resp=await tusRequest(uploadUrl,'PATCH',{
+          'Tus-Resumable':'1.0.0','Upload-Offset':String(offset),
+          'Content-Type':'application/offset+octet-stream',
+          'apikey':C0.key,'Authorization':'Bearer '+token
+        },chunk);
+        if(resp.status===204){
+          const next=Number(resp.getResponseHeader('Upload-Offset'));
+          offset=Number.isFinite(next)&&next>offset?next:end;ok=true;
+        }else{
+          lastErr=new Error(resp.responseText||('HTTP '+resp.status));
+          try{
+            const head=await tusRequest(uploadUrl,'HEAD',{
+              'Tus-Resumable':'1.0.0','apikey':C0.key,'Authorization':'Bearer '+token
+            });
+            const serverOffset=Number(head.getResponseHeader('Upload-Offset'));
+            if(head.status>=200&&head.status<300&&Number.isFinite(serverOffset)&&serverOffset>=offset){
+              offset=serverOffset;
+              if(offset>=end)ok=true;
+            }
+          }catch(_){}
+          if(!ok&&attempt===2)throw lastErr;
+        }
+      }catch(err){lastErr=err;if(attempt===2)throw lastErr}
+    }
+    const pct=Math.min(100,Math.floor(offset/f.size*100));
+    if(pct>=lastShown+10||offset>=f.size){lastShown=pct;toast('Đang tải lên Supabase: '+pct+'%');}
+  }
+}
+async function putFile(f){
   const ext=(f.name.split('.').pop()||'bin').toLowerCase(),path=me.id+'/'+crypto.randomUUID()+'.'+ext;
-  const {error}=await sb.storage.from('models').upload(path,f);if(error){toast('Không lưu được tệp: '+error.message);return null}return{path,ext}}
+  try{
+    if(f.size>6*1024*1024)await tusUploadModel(f,path);
+    else{
+      const {error}=await sb.storage.from('models').upload(path,f,{contentType:f.type||'application/octet-stream'});
+      if(error)throw error;
+    }
+    return{path,ext};
+  }catch(error){
+    console.error('Supabase model upload failed:',error);
+    const msg=String(error&&error.message||error);
+    if(/413|payload too large|maximum.*size|file size/i.test(msg))
+      toast('Supabase từ chối file do giới hạn dung lượng. Hãy tăng giới hạn file trong Storage settings.');
+    else toast('Không lưu được tệp lên Supabase: '+msg);
+    return null;
+  }
+}
 async function cloudUpload(f){const u=await putFile(f);if(!u)return null;
   const {data,error}=await sb.from('models').insert({name:f.name,model_name:f.name,fmt:u.ext,size:f.size,path:u.path}).select().single();if(error){toast(error.message);return null}
   listFiles();toast('Đã lưu "'+f.name+'" vào Tệp của tôi.');return data}
