@@ -268,22 +268,38 @@ function fit(){const c=bb.getCenter(V3()),r=bb.getSize(V3()).length()/2||1;mR=r;
   const k=sun.shadow.camera;k.left=k.bottom=-r*1.3;k.right=k.top=r*1.3;k.near=.1;k.far=r*8;k.updateProjectionMatrix();sunPos()}
 function sunPos(){const c=bb.getCenter(V3()),r=bb.getSize(V3()).length()/2||1,a=$('#az').value*Math.PI/180;
   sun.position.set(c.x+Math.cos(a)*r*2.5,c.y+Math.sin(a)*r*2.5,c.z+r*2.2);sun.target.position.copy(c)}
-let bigModel=false;
-function wasmBytes(){return Uint8Array.from(atob($('#ifcw').textContent.trim()),c=>c.charCodeAt(0))}
-async function loadIFC(f){toast('Đang đọc IFC trong nền...');let wk;
-  try{const buf=await f.arrayBuffer(),merge=f.size>3e7,root=new T.Group(),mats=new Map();
+let bigModel=false,pendingCache=null;
+const wasmBytes=()=>Uint8Array.from(atob($('#ifcw').textContent.trim()),c=>c.charCodeAt(0));
+function meshFrom(m,mats){let mt=mats.get(m.key);if(!mt){const col=new T.Color().setRGB(m.c[0],m.c[1],m.c[2]).convertSRGBToLinear();
+    mt=new T.MeshStandardMaterial({color:col,roughness:.8,name:m.key,transparent:m.c[3]<1,opacity:m.c[3],depthWrite:m.c[3]>=1});mats.set(m.key,mt)}
+  const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(m.pos,3));g.setAttribute('normal',new T.BufferAttribute(m.nor,3,m.nor instanceof Int8Array));g.setIndex(new T.BufferAttribute(m.idx,1));
+  const ms=new T.Mesh(g,mt);ms.name=m.name;return ms}
+// Bản đã xử lý (.fsc): hình học đã dựng sẵn, mở lại không cần đọc IFC. Pháp tuyến nén Int8, chỉ số Uint16 khi được.
+function encodeCache(parts){const meshes=[],pad=n=>(4-(n%4))%4;let off=0;
+  const items=parts.map(m=>{const vp=m.pos.length/3,ni=m.idx.length,i16=vp<65536,nb=vp*3,ib=ni*(i16?2:4),o=off;
+    off+=vp*12+nb+pad(nb)+ib+pad(ib);meshes.push({n:m.name,k:m.key,c:m.c,vp,ni,i16,off:o});return{m,vp,i16,o}});
+  const hb=new TextEncoder().encode(JSON.stringify({v:1,meshes})),ds=8+hb.length+pad(hb.length),buf=new ArrayBuffer(ds+off),u8=new Uint8Array(buf);
+  u8.set([70,83,67,49],0);new DataView(buf).setUint32(4,hb.length,true);u8.set(hb,8);
+  items.forEach(({m,vp,i16,o})=>{let p=ds+o;new Float32Array(buf,p,vp*3).set(m.pos);p+=vp*12;const n8=new Int8Array(buf,p,vp*3);
+    for(let k=0;k<vp;k++){const x=m.nor[k*3],y=m.nor[k*3+1],z=m.nor[k*3+2],l=Math.hypot(x,y,z)||1;n8[k*3]=Math.round(x/l*127);n8[k*3+1]=Math.round(y/l*127);n8[k*3+2]=Math.round(z/l*127)}
+    p+=vp*3+pad(vp*3);(i16?new Uint16Array(buf,p,m.idx.length):new Uint32Array(buf,p,m.idx.length)).set(m.idx)});
+  return new Blob([buf])}
+function parseCache(buf){const dv=new DataView(buf);if(new TextDecoder().decode(new Uint8Array(buf,0,4))!=='FSC1')throw new Error('Tệp xử lý sẵn không hợp lệ');
+  const hl=dv.getUint32(4,true),head=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,hl))),ds=8+hl+((4-(hl%4))%4),root=new T.Group(),mats=new Map();
+  head.meshes.forEach(e=>{let p=ds+e.off;const pos=new Float32Array(buf,p,e.vp*3);p+=e.vp*12;const nor=new Int8Array(buf,p,e.vp*3);p+=e.vp*3+((4-((e.vp*3)%4))%4);
+    const idx=e.i16?new Uint16Array(buf,p,e.ni):new Uint32Array(buf,p,e.ni);root.add(meshFrom({name:e.n,key:e.k,c:e.c,pos,nor,idx},mats))});
+  return root}
+
+async function loadIFC(f){toast('Đang đọc IFC trong nền, trang vẫn dùng được...');let wk;
+  try{const buf=await f.arrayBuffer(),merge=f.size>3e7,root=new T.Group(),mats=new Map(),parts=[];
     wk=new Worker(URL.createObjectURL(new Blob([$('#ifcwk').textContent],{type:'text/javascript'})));
     await new Promise((ok,no)=>{wk.onmessage=e=>{const m=e.data;
-      if(m.type=='mesh'){let mt=mats.get(m.key);if(!mt){const col=new T.Color().setRGB(m.c[0],m.c[1],m.c[2]).convertSRGBToLinear();
-          mt=new T.MeshStandardMaterial({color:col,roughness:.8,name:m.key,transparent:m.c[3]<1,opacity:m.c[3],depthWrite:m.c[3]>=1});mats.set(m.key,mt)}
-        const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(m.pos,3));g.setAttribute('normal',new T.BufferAttribute(m.nor,3));g.setIndex(new T.BufferAttribute(m.idx,1));
-        const ms=new T.Mesh(g,mt);ms.name=m.name;root.add(ms)}
-      else if(m.type=='progress')toast('Đang đọc IFC: '+m.n+' chi tiết...');
-      else if(m.type=='done')ok();else if(m.type=='error')no(new Error(m.msg))};
-      wk.onerror=ev=>no(new Error(ev.message||'lỗi bộ đọc'));
+      if(m.type=='mesh'){parts.push(m);root.add(meshFrom(m,mats))}
+      else if(m.type=='progress')toast('Đang đọc IFC: '+m.n+' chi tiết...');else if(m.type=='done')ok();else if(m.type=='error')no(new Error(m.msg))};
+      wk.onerror=ev=>no(new Error(ev.message||'lỗi bộ đọc IFC'));
       wk.postMessage({lib:new URL('web-ifc-api-iife.js',location.href).href,wasm:wasmBytes(),buf,merge},[buf])});
     wk.terminate();if(!root.children.length)return toast('Không tìm thấy hình học trong file IFC.');
-    setModel(root,'ifc');toast('Đã tải '+f.name+': '+gs.length+' nhóm vật liệu'+(merge?' (file lớn: các chi tiết được gộp theo tên vật liệu).':'.'))}
+    pendingCache=parts;setModel(root,'ifc');toast('Đã tải '+f.name+': '+gs.length+' nhóm vật liệu'+(merge?' (file lớn nên gộp theo vật liệu).':'.'))}
   catch(e){console.error(e);if(wk)wk.terminate();toast('Không đọc được IFC: '+(e.message||e))}}
 let penOn=false,held=null;
 function showHeld(){$('#held').style.display=held?'flex':'none';if(held){$('#hi').src=held.m.thumb;$('#hn').textContent=held.m.n}}
@@ -426,37 +442,47 @@ async function renameCloud(r){const nm=(prompt('Tên mới:',r.name)||'').trim()
   const {error}=await sb.from('models').update({name:nm}).eq('id',r.id);if(error)return toast(error.message);r.name=nm;if(cur&&cur.id===r.id){cur.name=nm;showCur()}listFiles()}
 const gz=b=>new Response(b.stream().pipeThrough(new CompressionStream('gzip'))).blob();
 const gunzip=b=>new Response(b.stream().pipeThrough(new DecompressionStream('gzip'))).blob();
-async function putFile(f){const ext=(f.name.split('.').pop()||'bin').toLowerCase();let up=f,suf='';
-  if(window.CompressionStream&&/^(ifc|obj|gltf|fbx)$/.test(ext)){toast('Đang nén tệp để lưu lên tài khoản...');up=await gz(f);suf='.gz'}
+async function putBlob(up,full){
   if(up.size>3e7){
-    const {data,error}=await sb.functions.invoke('b2-sign',{body:{action:'put',ext:ext+suf}});
+    const {data,error}=await sb.functions.invoke('b2-sign',{body:{action:'put',ext:full}});
     if(error||!data||!data.url){toast('Không xin được quyền tải lên Backblaze: '+((error&&error.message)||(data&&data.error)||'lỗi không rõ'));return null}
     toast('Đang tải lên Backblaze ('+Math.round(up.size/1e6)+' MB)...');
     let r;try{r=await fetch(data.url,{method:'PUT',body:up})}catch(e){toast('Không tải lên được Backblaze. Hãy kiểm tra quy tắc CORS của bucket.');return null}
     if(!r.ok){toast('Backblaze từ chối tải lên (mã '+r.status+').');return null}
-    return{path:data.key,ext,store:'b2'}}
-  const path=me.id+'/'+crypto.randomUUID()+'.'+ext+suf;
-  const {error}=await sb.storage.from('models').upload(path,up,suf?{contentType:'application/gzip'}:{});if(error){toast('Không lưu được tệp: '+error.message);return null}return{path,ext,store:'supabase'}}
+    return{path:data.key,store:'b2'}}
+  const path=me.id+'/'+crypto.randomUUID()+'.'+full;
+  const {error}=await sb.storage.from('models').upload(path,up,full.endsWith('.gz')?{contentType:'application/gzip'}:{});if(error){toast('Không lưu được tệp: '+error.message);return null}return{path,store:'supabase'}}
+async function putFile(f){const ext=(f.name.split('.').pop()||'bin').toLowerCase();let up=f,suf='';
+  if(window.CompressionStream&&/^(ifc|obj|gltf|fbx)$/.test(ext)){toast('Đang nén tệp để lưu lên tài khoản...');up=await gz(f);suf='.gz'}
+  const r=await putBlob(up,ext+suf);return r&&{path:r.path,store:r.store,ext}}
+async function dlFile(store,path){
+  if(store==='b2'){const g=await sb.functions.invoke('b2-sign',{body:{action:'get',key:path}});
+    if(g.error||!g.data||!g.data.url){toast('Không xin được quyền tải từ Backblaze: '+((g.error&&g.error.message)||(g.data&&g.data.error)||'lỗi không rõ'));return null}
+    let rs;try{rs=await fetch(g.data.url)}catch(e){toast('Không tải được từ Backblaze. Hãy kiểm tra quy tắc CORS của bucket.');return null}
+    if(!rs.ok){toast('Backblaze trả lỗi '+rs.status);return null}return await rs.blob()}
+  const d=await sb.storage.from('models').download(path);if(d.error){toast('Không tải được: '+d.error.message);return null}return d.data}
+async function delFile(store,path){if(!path)return;if(store==='b2')await sb.functions.invoke('b2-sign',{body:{action:'delete',key:path}});else await sb.storage.from('models').remove([path])}
+async function buildCache(row,parts){try{const up=await gz(encodeCache(parts)),u=await putBlob(up,'fsc.gz');if(!u)return;
+  const {error}=await sb.from('models').update({cache_path:u.path,cache_store:u.store}).eq('id',row.id);if(error){console.warn(error);return}
+  row.cache_path=u.path;row.cache_store=u.store;listFiles();toast('Đã lưu bản xử lý sẵn: lần mở sau sẽ nhanh hơn nhiều.')}catch(e){console.warn(e)}}
+async function openCache(r){try{toast('Đang tải bản xử lý sẵn...');const b=await dlFile(r.cache_store,r.cache_path);if(!b)return false;
+  const root=parseCache(await (await gunzip(b)).arrayBuffer());lastFile=null;pendingCloud=r;pendingCache=null;setModel(root,'ifc');toast('Đã mở "'+r.name+'".');return true}catch(e){console.warn(e);return false}}
 async function cloudUpload(f){const u=await putFile(f);if(!u)return null;
   const {data,error}=await sb.from('models').insert({name:f.name,model_name:f.name,fmt:u.ext,size:f.size,path:u.path,store:u.store}).select().single();if(error){toast(error.message);return null}
   listFiles();toast('Đã lưu "'+f.name+'" vào Tệp của tôi.');return data}
 async function attach(row,f){const u=await putFile(f);if(!u)return row;const old=row.path;
-  const {data,error}=await sb.from('models').update({path:u.path,fmt:u.ext,size:f.size,model_name:f.name,store:u.store}).eq('id',row.id).select().single();if(error){toast(error.message);return row}
-  if(old){if(row.store==='b2')await sb.functions.invoke('b2-sign',{body:{action:'delete',key:old}});else await sb.storage.from('models').remove([old])}
+  const {data,error}=await sb.from('models').update({path:u.path,fmt:u.ext,size:f.size,model_name:f.name,store:u.store,cache_path:null,cache_store:null}).eq('id',row.id).select().single();if(error){toast(error.message);return row}
+  await delFile(row.store,old);await delFile(row.cache_store,row.cache_path);
   await sb.from('scene_states').upsert({model_id:row.id,state:{},updated_by:me.id,updated_at:new Date().toISOString()});
   listFiles();toast('Đã thêm "'+f.name+'" vào dự án "'+row.name+'".');return data}
 async function openCloud(r){
   if(!r.path){$('#drawer').hidden=true;unsub();clearModel();cur=r;showCur();subscribeState();toast('Đã mở dự án "'+r.name+'". Hãy tải model lên để bắt đầu.');return}
-  toast('Đang tải tệp...');let data;
-  if(r.store==='b2'){const g=await sb.functions.invoke('b2-sign',{body:{action:'get',key:r.path}});if(g.error||!g.data||!g.data.url)return toast('Không xin được quyền tải từ Backblaze: '+((g.error&&g.error.message)||(g.data&&g.data.error)||'lỗi không rõ'));
-    let rs;try{rs=await fetch(g.data.url)}catch(e){return toast('Không tải được từ Backblaze. Hãy kiểm tra quy tắc CORS của bucket.')}
-    if(!rs.ok)return toast('Backblaze trả lỗi '+rs.status);data=await rs.blob()}
-  else{const d=await sb.storage.from('models').download(r.path);if(d.error)return toast('Không tải được: '+d.error.message);data=d.data}
+  toast('Đang tải tệp...');
   if(r.owner!==me.id){const {data:s}=await sb.from('shares').select('can_edit').eq('model_id',r.id).eq('user_id',me.id).maybeSingle();
     r.can_edit=!s||s.can_edit;if(s&&!s.can_edit)toast('Bạn chỉ có quyền xem; thay đổi sẽ không được lưu.')}
-  $('#drawer').hidden=true;await loadFile(new File([r.path.endsWith('.gz')?await gunzip(data):data],r.model_name||(r.name.includes('.')?r.name:r.name+'.'+r.fmt)),r)}
+  $('#drawer').hidden=true;if(r.cache_path&&await openCache(r))return;const data=await dlFile(r.store,r.path);if(!data)return;await loadFile(new File([r.path.endsWith('.gz')?await gunzip(data):data],r.model_name||(r.name.includes('.')?r.name:r.name+'.'+r.fmt)),r)}
 async function delCloud(r){if(!confirm('Xóa "'+r.name+'" khỏi lịch sử?'))return;
-  if(r.path){if(r.store==='b2')await sb.functions.invoke('b2-sign',{body:{action:'delete',key:r.path}});else await sb.storage.from('models').remove([r.path])}const {error}=await sb.from('models').delete().eq('id',r.id);if(error)return toast(error.message);
+  await delFile(r.store,r.path);await delFile(r.cache_store,r.cache_path);const {error}=await sb.from('models').delete().eq('id',r.id);if(error)return toast(error.message);
   if(cur&&cur.id===r.id){unsub();cur=null;showCur()}if(shareRow&&shareRow.id===r.id){shareRow=null;$('#shr').hidden=true}listFiles()}
 async function openShare(r){shareRow=r;$('#shr').hidden=false;$('#shn').textContent=r.name;await listShares()}
 async function listShares(){const box=$('#shl');box.innerHTML='';const {data}=await sb.from('shares').select('user_id,can_edit').eq('model_id',shareRow.id);
@@ -492,12 +518,12 @@ function subscribeState(){const id=cur.id;subId=id;chan=sb.channel('m:'+id,{conf
   .on('postgres_changes',{event:'*',schema:'public',table:'scene_states',filter:'model_id=eq.'+id},p=>{const n=p.new;if(n&&n.updated_by!==me.id&&n.state&&n.state.v)applyState(n.state)})
   .on('presence',{event:'sync'},()=>{const k=Object.keys(chan.presenceState());$('#pres').textContent=k.length>1?'Đang xem: '+k.join(', '):''})
   .subscribe(async s=>{if(s=='SUBSCRIBED')await chan.track({uid:me.uid})})}
-async function onModelLoaded(){if(!sb||!me||srcFmt=='demo')return;let pull=false;
+async function onModelLoaded(){const pc=pendingCache;pendingCache=null;if(!sb||!me||srcFmt=='demo')return;let pull=false;
   if(pendingCloud){unsub();cur=pendingCloud;pendingCloud=null;pull=true}
   else if(lastFile){const own=cur&&cur.owner===me.id&&cur.is_project;
     if(own&&(!cur.path||confirm('Thay model của dự án "'+cur.name+'" bằng tệp này?\nOK = thay trong dự án. Hủy = lưu thành tệp riêng.')))cur=await attach(cur,lastFile);
     else{unsub();cur=await cloudUpload(lastFile)}}
-  showCur();if(!cur)return;
+  showCur();if(!cur)return;if(pc&&srcFmt=='ifc'&&cur.owner===me.id&&!cur.cache_path)buildCache(cur,pc);
   if(pull){const {data}=await sb.from('scene_states').select('state').eq('model_id',cur.id).maybeSingle();if(data&&data.state&&data.state.v)await applyState(data.state)}
   if(subId!==cur.id){unsub();subscribeState()}}
 
