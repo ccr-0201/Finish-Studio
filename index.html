@@ -82,14 +82,14 @@ input[type=text],input[type=password]{font:inherit;color:var(--tx);background:va
 <script src="fflate.min.js"></script>
 <script src="FBXLoader.js"></script>
 <div id="auth"><div class="ac"><b style="font-size:16px">Finish Studio</b><div class="mu" style="margin:4px 0 12px">Đăng nhập để tiếp tục</div>
-<input id="aid" type="text" placeholder="ID" autocomplete="username"><input id="apw" type="password" placeholder="Mật khẩu" autocomplete="current-password">
-<div id="aer"></div><div style="display:flex;gap:8px;margin-top:6px"><button id="alogin" class="on" style="flex:1">Đăng nhập</button><button id="asign" style="flex:1">Tạo tài khoản</button></div></div></div>
+<input id="aid" type="text" placeholder="Email" autocomplete="username"><input id="apw" type="password" placeholder="Mật khẩu" autocomplete="current-password">
+<div id="aer"></div><div class="mu" style="font-size:12px;margin-top:6px">Tài khoản mới cần quản trị viên duyệt mới dùng được.</div><div style="display:flex;gap:8px;margin-top:6px"><button id="alogin" class="on" style="flex:1">Đăng nhập</button><button id="asign" style="flex:1">Tạo tài khoản</button></div></div></div>
 <div id="drawer" hidden><div class="dh"><b>Tài khoản</b><button id="dclose">Đóng</button></div>
 <div class="row">Tên hiển thị<input id="aname" type="text" style="margin:0"></div><div class="row">Màu nền<input id="abg" type="color" value="#b9c4cf"></div>
 <div class="mu">Khi bấm Lưu, trang cũng lưu độ sáng và hướng nắng đang đặt.</div>
 <div style="display:flex;gap:6px;margin-top:8px"><button id="asave">Lưu cá nhân hóa</button><button id="aout">Đăng xuất</button></div>
-<h3>Tệp của tôi</h3><div id="fmine"></div><h3>Được chia sẻ với tôi</h3><div id="fshared"></div>
-<div id="shr" hidden><h3>Chia sẻ: <span id="shn"></span></h3><div style="display:flex;gap:6px"><input id="shi" type="text" placeholder="ID người nhận" style="margin:0"><button id="shadd">Thêm</button></div><div id="shl" style="margin-top:8px"></div></div></div>
+<div id="adm" hidden><h3>Tài khoản chờ duyệt</h3><div id="apend"></div></div><h3>Tệp của tôi</h3><div id="fmine"></div><h3>Được chia sẻ với tôi</h3><div id="fshared"></div>
+<div id="shr" hidden><h3>Chia sẻ: <span id="shn"></span></h3><div style="display:flex;gap:6px"><input id="shi" type="text" placeholder="Email người nhận" style="margin:0"><button id="shadd">Thêm</button></div><div id="shl" style="margin-top:8px"></div></div></div>
 <div id="pdlg"><div class="ac"><b style="font-size:16px">Dự án mới</b>
 <label class="mu" style="display:block;margin:12px 0 4px"><input type="radio" name="pm" value="empty" checked> Tạo dự án trống, rồi tải model lên</label>
 <label class="mu" style="display:block;margin:4px 0 10px"><input type="radio" name="pm" value="cur" id="pmcur"> Dùng model đang mở: <span id="pmn"></span></label>
@@ -378,29 +378,38 @@ const mailOf=i=>i+'@5cmarchi.app';
 async function initCloud(){const C0=window.CFG||{};if(!C0.url||!C0.key||!window.supabase)return;
   sb=window.supabase.createClient(C0.url,C0.key);
   const {data}=await sb.auth.getSession();if(data.session)await enter(data.session.user);else $('#auth').style.display='flex'}
-async function doAuth(signup){const id=$('#aid').value.trim().toLowerCase(),pw=$('#apw').value,er=$('#aer');er.textContent='';
-  if(!/^[a-z0-9_.-]{3,20}$/.test(id))return er.textContent='ID gồm 3 đến 20 ký tự: chữ thường không dấu, số, dấu . _ -';
-  if(pw.length<6)return er.textContent='Mật khẩu tối thiểu 6 ký tự.';
-  let r;
-  if(signup){r=await sb.auth.signUp({email:mailOf(id),password:pw});
-    if(!r.error){if(!r.data.session)return er.textContent='Chưa đăng nhập được: cần tắt "Confirm email" trong Supabase (xem hướng dẫn).';
-      const {error}=await sb.from('profiles').insert({id:r.data.user.id,uid:id,display_name:id});if(error)return er.textContent='Không tạo được hồ sơ: '+error.message}}
-  else r=await sb.auth.signInWithPassword({email:mailOf(id),password:pw});
-  if(r.error)return er.textContent=/invalid login/i.test(r.error.message)?'Sai ID hoặc mật khẩu.':/already/i.test(r.error.message)?'ID này đã có người dùng.':r.error.message;
+function showAuthMsg(t,info){const er=$('#aer');er.textContent=t;er.style.color=info?'#9bd4c5':'#e8837a'}
+async function doAuth(signup){const raw=$('#aid').value.trim().toLowerCase(),pw=$('#apw').value;showAuthMsg('');
+  if(!raw)return showAuthMsg('Hãy nhập email.');
+  if(signup&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw))return showAuthMsg('Hãy nhập địa chỉ email hợp lệ.');
+  if(pw.length<6)return showAuthMsg('Mật khẩu tối thiểu 6 ký tự.');
+  if(signup){const r=await sb.auth.signUp({email:raw,password:pw});
+    if(r.error)return showAuthMsg(/already|registered/i.test(r.error.message)?'Email này đã đăng ký. Hãy đăng nhập.':r.error.message);
+    if(!r.data.session)return showAuthMsg('Chưa hoàn tất: Supabase đang bật "Confirm email" nên không tạo được tài khoản ngay. Hãy tắt mục đó (xem hướng dẫn).');
+    await sb.auth.signOut();return showAuthMsg('Đã gửi đăng ký. Hãy chờ quản trị viên duyệt, sau đó đăng nhập.',true)}
+  const email=raw.includes('@')?raw:raw+'@5cmarchi.app',r=await sb.auth.signInWithPassword({email,password:pw});
+  if(r.error)return showAuthMsg(/invalid login/i.test(r.error.message)?'Sai email hoặc mật khẩu.':r.error.message);
   await enter(r.data.user)}
 $('#alogin').onclick=()=>doAuth(false);$('#asign').onclick=()=>doAuth(true);$('#apw').onkeydown=e=>{if(e.key=='Enter')doAuth(false)};
-async function enter(u){me={id:u.id};let {data:p}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle();
-  if(!p){const uid=(u.email||'').split('@')[0];await sb.from('profiles').insert({id:u.id,uid,display_name:uid});p={uid,display_name:uid,settings:{}}}
-  me.uid=p.uid;me.name=p.display_name||p.uid;
+async function enter(u){me={id:u.id};const {data:p}=await sb.from('profiles').select('*').eq('id',u.id).maybeSingle();
+  if(!p||!p.approved){await sb.auth.signOut();me=null;$('#auth').style.display='flex';showAuthMsg(p?'Tài khoản đang chờ quản trị viên duyệt. Hãy quay lại sau.':'Không tìm thấy hồ sơ tài khoản. Hãy liên hệ quản trị viên.',true);return}
+  me.uid=p.uid;me.name=p.display_name||p.uid;me.admin=!!p.is_admin;
   $('#auth').style.display='none';$('#bacct').hidden=false;$('#bproj').hidden=false;$('#bacct').textContent=me.name;$('#aname').value=me.name;applyPrefs(p.settings||{});
+  if(me.admin){const n=await listPending();if(n)toast('Có '+n+' tài khoản đang chờ duyệt (mở bảng tài khoản để duyệt).')}
   await loadMaps();await listFiles()}
+async function listPending(){if(!me||!me.admin)return 0;const {data}=await sb.from('profiles').select('id,uid,created_at').eq('approved',false).order('created_at');
+  const box=$('#apend');box.innerHTML='';$('#adm').hidden=false;
+  if(!data||!data.length){box.append(el('div','Không có tài khoản nào chờ duyệt.','mu'));return 0}
+  data.forEach(q=>{const d=el('div','','frow'),b=el('div','','fb'),ok=el('button','Duyệt');
+    ok.onclick=async()=>{const {error}=await sb.from('profiles').update({approved:true}).eq('id',q.id);if(error)return toast(error.message);toast('Đã duyệt '+q.uid);listPending()};
+    b.append(ok);d.append(el('div',q.uid,'fn'),el('div','Đăng ký: '+new Date(q.created_at).toLocaleString('vi-VN'),'mu'),b);box.append(d)});return data.length}
 function applyPrefs(st){if(st.bg){S.background.set(st.bg);$('#abg').value=st.bg}
   if(st.ex){$('#ex').value=st.ex;R.toneMappingExposure=+st.ex}if(st.az!=null){$('#az').value=st.az;sunPos()}}
 $('#asave').onclick=async()=>{const st={bg:$('#abg').value,ex:$('#ex').value,az:$('#az').value},nm=$('#aname').value.trim()||me.uid;
   const {error}=await sb.from('profiles').update({display_name:nm,settings:st}).eq('id',me.id);if(error)return toast(error.message);
   me.name=nm;$('#bacct').textContent=nm;applyPrefs(st);toast('Đã lưu cá nhân hóa.')};
 $('#aout').onclick=async()=>{await sb.auth.signOut();location.reload()};
-$('#bacct').onclick=()=>{$('#drawer').hidden=!$('#drawer').hidden;if(!$('#drawer').hidden)listFiles()};$('#dclose').onclick=()=>$('#drawer').hidden=true;
+$('#bacct').onclick=()=>{$('#drawer').hidden=!$('#drawer').hidden;if(!$('#drawer').hidden){listFiles();listPending()}};$('#dclose').onclick=()=>$('#drawer').hidden=true;
 
 /* map vật liệu của người dùng */
 async function mapItem(path,name){let it=LIB.find(m=>m.path===path);if(it)return it;
@@ -494,7 +503,7 @@ async function listShares(){const box=$('#shl');box.innerHTML='';const {data}=aw
     rm.onclick=async()=>{await sb.from('shares').delete().eq('model_id',shareRow.id).eq('user_id',x.user_id);listShares()};
     b.append(sl,rm);d.append(el('div',nm[x.user_id]||'?','fn'),b);box.append(d)})}
 $('#shadd').onclick=async()=>{const id=$('#shi').value.trim().toLowerCase();if(!id||!shareRow)return;
-  const {data:p}=await sb.from('profiles').select('id,uid').eq('uid',id).maybeSingle();if(!p)return toast('Không tìm thấy ID "'+id+'".');if(p.id===me.id)return toast('Đó là ID của bạn.');
+  const {data:p}=await sb.from('profiles').select('id,uid').eq('uid',id).maybeSingle();if(!p)return toast('Không tìm thấy tài khoản "'+id+'".');if(p.id===me.id)return toast('Đó là ID của bạn.');
   const {error}=await sb.from('shares').upsert({model_id:shareRow.id,user_id:p.id,can_edit:true});if(error)return toast(error.message);$('#shi').value='';listShares()};
 
 /* phương án vật liệu dùng chung (lưu tự động, cập nhật trực tiếp cho người cùng xem) */
